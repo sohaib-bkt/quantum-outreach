@@ -1,0 +1,10 @@
+# resto — restaurants. Broad queries return venues WITH sites; prefer
+# cuisine-qualified long-tail (marocain/italien/libanais) in mid-size cities.
+restaurant marocain lille
+restaurant italien nantes
+restaurant libanais lille
+restaurant marocain nantes
+restaurant italien rennes
+resto amiens
+resto rouen
+restaurant africain lille

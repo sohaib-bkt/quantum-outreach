@@ -7,14 +7,14 @@ Semi-auto Instagram prospecting for quantum.web.space (France/GDPR). AI finds + 
 - Repo = `~/quantum-outreach/` (the home dir itself is not a repo). Logic lives here; leads live **outside** it per agent-reach rule:
   - `~/.agent-reach/quantum-prospects.csv` — persistent store, columns `date,keyword,username,niche,problem_found,message_sent,replied`. **Never commit or move into repo.**
   - `/tmp/quantum-<kw>-<date>.yaml` — raw per-run output, ephemeral.
-- `run.sh "keyword" [limit]` (default 40) — single keyword. `sweep.sh <list> [limit]` loops keywords from `keywords.txt` with 20s pauses. `niches/*.md` — per-vertical problem + FR message angle (read before drafting).
+- `run.sh "keyword" [limit]` (default 40) — single keyword. `sweep.sh <niche|file|all> [limit]` loops a `keywords/<niche>.txt` pack (`barber coiffure beaute resto artisans sante`) with 20s pauses. `niches/*.md` — per-vertical problem + FR message angle (read before drafting).
 
 ## Commands
 
 ```bash
 cd ~/quantum-outreach
 ./run.sh "coiffeur rouen" 40
-./sweep.sh keywords.txt 40
+./sweep.sh beaute 40     # niche pack; ls keywords/ for all
 bash -n run.sh   # syntax check after edits (no test suite exists)
 ```
 
@@ -22,7 +22,7 @@ bash -n run.sh   # syntax check after edits (no test suite exists)
 
 ## Gotchas that bite
 
-- **IG returns ~5 users per query no matter `--limit`.** Scale via more keyword variations (`keywords.txt`), not bigger limits. Expect `[]` for phrasings nobody uses as a username (e.g. "clinique dentaire rouen").
+- **IG returns ~5 users per query no matter `--limit`.** Scale via niche packs (`keywords/<niche>.txt`, run with `./sweep.sh <niche>`), not bigger limits. Expect `[]` for phrasings nobody uses as a username (e.g. "clinique dentaire rouen" — see `keywords/sante.txt` warning).
 - **`profile` endpoint is near-permanently HTTP 429; `user` returns HTML login wall.** `run.sh` already degrades (stages `to_verify`, prints profile links for manual check). Do not "fix" by retry hammering — back off ~1h. Enrichment filters (`MIN_FOLLOWERS=30`, `MIN_POSTS=5`, `REQUIRE_BIO=1`, `RECENCY_DAYS=120`, `SKIP_RECENCY`, `SLEEP_S=10`) arm automatically when limits lift.
 - **CSV dedupe must be exact username-field match** (`awk -F, '$3==u'`). Never `grep ",$u,"` — regex dots match the keyword column (`barber.lille` false-matched `barber lille`) and silently drop fresh prospects.
 - Keep `sleep`s between IG calls; search 429 → exit 5 means stop for 10–15 min, not retry.

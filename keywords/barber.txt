@@ -1,0 +1,13 @@
+# barber — barbershops. Angle: site + résa directe (stop Planity commission).
+barber lille
+barbier lille
+barber rouen
+barbier rouen
+barber amiens
+barbier amiens
+barber nantes
+barbier nantes
+barber rennes
+barbier rennes
+barber bordeaux
+barbier bordeaux
