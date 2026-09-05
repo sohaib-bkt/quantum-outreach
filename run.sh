@@ -79,10 +79,10 @@ while IFS=$'\t' read -r u is_priv is_ver; do
   [ -z "$u" ] && continue
   if [ "$is_ver" = "1" ]; then echo "drop $u (verified/brand)"; continue; fi
   if [ "$is_priv" = "1" ]; then
-    grep -q ",$u," "$CSV" 2>/dev/null || echo "$D,$KEYWORD,$u,,SKIP private account,no,no" >> "$CSV"
+    awk -F, -v u="$u" '$3==u{found=1} END{exit !found}' "$CSV" 2>/dev/null || echo "$D,$KEYWORD,$u,,SKIP private account,no,no" >> "$CSV"
     echo "drop $u (private)"; continue
   fi
-  if grep -q ",$u," "$CSV" 2>/dev/null; then echo "drop $u (already in CSV)"; continue; fi
+  if awk -F, -v u="$u" '$3==u{found=1} END{exit !found}' "$CSV" 2>/dev/null; then echo "drop $u (already in CSV)"; continue; fi
   # --- stage 2: enrich via profile (followers/posts/bio); degrade gracefully on 429 ---
   if [ "$ENRICH_HIT_429" = "0" ]; then
     POUT=$(opencli instagram profile "$u" -f yaml 2>&1 || true)
@@ -150,7 +150,7 @@ print(f'{f}\t{p}\t{1 if bio and bio not in (chr(39)+chr(39),chr(34)+chr(34),\"No
   fi
 done <<< "$CANDS"
 printf "%s\n" "${QUALIFIED[@]}" | sort -u > "$QLIST"
-N=$(grep -c . "$QLIST" 2>/dev/null || echo 0)
+N=$(grep -c . "$QLIST" 2>/dev/null || true); N=${N:-0}
 echo "--- $N qualified -> $QLIST (enriched raw: $ENRICHED) ---"
 if [ "$N" -gt 0 ]; then
   echo "Quick activity check (logged-in browser):"
