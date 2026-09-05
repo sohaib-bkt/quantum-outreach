@@ -5,7 +5,7 @@ Semi-auto Instagram prospecting for quantum.web.space (France/GDPR). AI finds + 
 ## Layout (non-obvious)
 
 - Repo = `~/quantum-outreach/` (the home dir itself is not a repo). Logic lives here; run outputs:
-  - `clients/<keyword>-<date>.csv` + `clients/pool.csv` — qualified per run (public IG usernames only, no PII). Committable.
+  - `clients/<niche>.csv` — qualified pool, one file per niche (public IG usernames only, no PII). Committable.
   - `~/.agent-reach/quantum-prospects.csv` — full store incl. OUT/SKIP + message tracking. **Never commit or move into repo.**
   - `/tmp/quantum-<kw>-<date>.yaml` — raw per-run output, ephemeral.
 - `run.sh "keyword" [limit]` (default 40) — single keyword, niche auto-detected
