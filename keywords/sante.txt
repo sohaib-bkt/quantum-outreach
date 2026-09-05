@@ -6,3 +6,7 @@ dentiste nantes
 optic lille
 dental rouen
 kine nantes
+kine rennes
+dentiste rennes
+osteo lille
+osteo nantes

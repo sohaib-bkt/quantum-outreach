@@ -15,3 +15,8 @@ barberlille
 lillebarber
 barberrouen
 barbernantes
+taper lille
+taper nantes
+barbershop lille
+barbershop nantes
+degrade lille

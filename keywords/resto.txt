@@ -10,3 +10,7 @@ resto rouen
 restaurant africain lille
 restolille
 restonantes
+traiteur lille
+traiteur nantes
+brunch lille
+burger nantes

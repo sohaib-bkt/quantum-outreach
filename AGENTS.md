@@ -8,7 +8,9 @@ Semi-auto Instagram prospecting for quantum.web.space (France/GDPR). AI finds + 
   - `clients/<keyword>-<date>.csv` + `clients/pool.csv` — qualified per run (public IG usernames only, no PII). Committable.
   - `~/.agent-reach/quantum-prospects.csv` — full store incl. OUT/SKIP + message tracking. **Never commit or move into repo.**
   - `/tmp/quantum-<kw>-<date>.yaml` — raw per-run output, ephemeral.
-- `run.sh "keyword" [limit]` (default 40) — single keyword. `sweep.sh <niche|file|all> [limit]` loops a `keywords/<niche>.txt` pack (`barber coiffure beaute resto artisans sante immobilier`) with 20s pauses. `niches/*.md` — per-vertical problem + FR message angle (read before drafting).
+- `run.sh "keyword" [limit]` (default 40) — single keyword, niche auto-detected
+  from `keywords/` packs (`NICHE=` overrides). `sweep.sh <niche|file|all> [limit]`
+  loops a `keywords/<niche>.txt` pack (`barber coiffure beaute resto artisans sante immobilier`) with 20s pauses. `niches/*.md` — per-vertical problem + FR message angle (read before drafting).
 
 ## Commands
 
@@ -20,6 +22,21 @@ bash -n run.sh   # syntax check after edits (no test suite exists)
 ```
 
 `run.sh` prepends `.venv/bin` to PATH itself. `opencli` resolves via nvm node v24.15.0 on PATH; bare `agent-reach` is NOT on PATH — use `./.venv/bin/agent-reach`.
+
+## Scaling with subagents (use this, don't sweep serially)
+
+IG rate-limits per browser session: `search` tolerates serial sweeps, but
+`profile`/`followers` 429 fast. Fan out with subagents (`task` tool,
+one per niche pack), then merge:
+
+- 1 subagent = 1 niche: `./sweep.sh <niche> 40` (it sets `NICHE`, routes to
+  `clients/<niche>.csv`). Max **2 concurrent** sweeps — more triggers 429
+  across all of them. Stagger starts ~2 min.
+- Web-check/verify phase parallelizes freely (independent web searches):
+  give each subagent 3–5 usernames + `VERIFY.md`, collect verdicts.
+- Merge = dedupe by username col 3 (`awk -F, '$3==u'`); master CSV
+  (`~/.agent-reach/quantum-prospects.csv`) is source of truth, niche files
+  are the committable pool. Never `grep ",$u,"` (regex dots false-match).
 
 ## Gotchas that bite
 

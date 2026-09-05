@@ -1,7 +1,7 @@
 #!/bin/bash
 # quantum-outreach entrypoint — keyword first, multi-niche, quality-filtered
 # Usage: ./run.sh "coiffeur amiens" 20
-#        ./run.sh   (will ask for keyword)
+#        NICHE=coiffure ./run.sh "coiffeur amiens"   (override niche file; else auto from keywords/ packs)
 # Env knobs: MIN_FOLLOWERS=30 MIN_POSTS=5 REQUIRE_BIO=1 RECENCY_DAYS=120 SKIP_RECENCY=0 SLEEP_S=10
 #            EXPAND=1 EXPAND_SEEDS=2 EXPAND_LIMIT=20
 set -e
@@ -197,30 +197,48 @@ print('\n'.join(out))")"
 fi
 N=$(grep -c . "$QLIST" 2>/dev/null || true); N=${N:-0}
 echo "--- $N qualified -> $QLIST (enriched raw: $ENRICHED) ---"
-# --- persist qualified in-repo under clients/ ---
+# --- persist qualified in-repo: one file per niche -> clients/<niche>.csv ---
 CDIR="$(cd "$(dirname "$0")" && pwd)/clients"
 mkdir -p "$CDIR"
-CFILE="$CDIR/${SAFE}-${STAMP}.csv"
-{ echo "date,keyword,username,stage";
-  while read -r u; do
-    [ -z "$u" ] && continue
-    STAGE=$(python3 -c "
+if [ -z "${NICHE:-}" ]; then
+  NICHE=$(python3 -c "
+import sys, glob, os
+kw = sys.argv[1]
+for fp in glob.glob(os.path.expanduser('~/quantum-outreach/keywords/*.txt')):
+  n = os.path.basename(fp)[:-4]
+  if n == 'README': continue
+  for line in open(fp, errors='ignore'):
+    if line.split('#')[0].strip() == kw: print(n); raise SystemExit
+print('misc')" "$KEYWORD")
+fi
+NFILE="$CDIR/$NICHE.csv"
+[ -f "$NFILE" ] || echo "date,keyword,username,niche,stage,sent,replied" > "$NFILE"
+python3 -c "
 import sys
-csv, want = sys.argv[1], sys.argv[2]
+csv, qlist, nfile, niche = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+have = set()
+for line in open(nfile, errors='ignore'):
+  p = line.rstrip('\n').split(',')
+  if len(p) > 2 and p[2] != 'username': have.add(p[2])
+users = [l.strip() for l in open(qlist, errors='ignore') if l.strip()]
+store = {}
 for line in open(csv, errors='ignore'):
-  p = line.rstrip('\n').split(',', 4)
-  if len(p) == 5 and p[2] == want:
-    print(p[4]); break" "$CSV" "$u")
-    echo "$D,$KEYWORD,$u,${STAGE:-staged}"
-  done < "$QLIST"; } > "$CFILE"
-POOL="$CDIR/pool.csv"
-[ -f "$POOL" ] || echo "date,keyword,username,stage" > "$POOL"
-tail -n +2 "$CFILE" | while IFS=, read -r d k u rest; do
-  [ -z "$u" ] && continue
-  awk -F, -v u="$u" '$3==u{found=1} END{exit !found}' "$POOL" 2>/dev/null || echo "$d,$k,$u,$rest" >> "$POOL"
-done
-# note: pool dedupe is best-effort; CSV (~/.agent-reach) stays the source of truth
-echo "--- clients file: $CFILE | pool: $POOL ---"
+  line = line.rstrip('\n')
+  if line.startswith('date,') or not line.strip(): continue
+  head, sent, replied = line.rsplit(',', 2)
+  p = head.split(',', 4)
+  if len(p) != 5: continue
+  d, kw, u, n4, stage = p
+  if stage.startswith(('SKIP','OUT')): continue
+  store[u] = (d, kw, stage, sent, replied)
+added = 0
+with open(nfile, 'a') as f:
+  for u in users:
+    if u in have or u not in store: continue
+    d, kw, stage, sent, replied = store[u]
+    f.write(f'{d},{kw},{u},{niche},{stage},{sent},{replied}\n')
+    have.add(u); added += 1
+print(f'niche file: {nfile} (+{added})')" "$CSV" "$QLIST" "$NFILE" "$NICHE"
 if [ "$N" -gt 0 ]; then
   echo "Quick activity check (logged-in browser):"
   while read -r u; do [ -n "$u" ] && echo "  https://www.instagram.com/$u/"; done < "$QLIST"

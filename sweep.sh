@@ -37,7 +37,10 @@ run_list() {
 for L in $LISTS; do
   case "$L" in */README.txt) continue;; esac
   echo "### pack: $L"
+  export NICHE=$(basename "$L" .txt)
+  # temp ad-hoc lists keep their filename as niche (one place per list)
   run_list "$L"
 done
+unset NICHE
 echo "=== sweep done: $TOTAL_Q keywords ==="
 echo "Qualified pool: sort -u /tmp/quantum-*-usernames.txt | grep -v '^$'"
