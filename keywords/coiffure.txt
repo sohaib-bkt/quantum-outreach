@@ -11,3 +11,6 @@ coiffeur rennes
 coiffure rennes
 coiffeur montpellier
 coiffure montpellier
+coiffurelille
+coiffeurlille
+coiffurerouen

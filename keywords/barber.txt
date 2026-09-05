@@ -11,3 +11,7 @@ barber rennes
 barbier rennes
 barber bordeaux
 barbier bordeaux
+barberlille
+lillebarber
+barberrouen
+barbernantes

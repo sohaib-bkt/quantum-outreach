@@ -3,6 +3,7 @@
 # Usage: ./run.sh "coiffeur amiens" 20
 #        ./run.sh   (will ask for keyword)
 # Env knobs: MIN_FOLLOWERS=30 MIN_POSTS=5 REQUIRE_BIO=1 RECENCY_DAYS=120 SKIP_RECENCY=0 SLEEP_S=10
+#            EXPAND=1 EXPAND_SEEDS=2 EXPAND_LIMIT=20
 set -e
 export PATH="$HOME/quantum-outreach/.venv/bin:$PATH"
 KEYWORD="${1:-}"
@@ -13,6 +14,9 @@ REQUIRE_BIO="${REQUIRE_BIO:-1}"
 RECENCY_DAYS="${RECENCY_DAYS:-120}"
 SKIP_RECENCY="${SKIP_RECENCY:-0}"
 SLEEP_S="${SLEEP_S:-10}"
+EXPAND="${EXPAND:-1}"
+EXPAND_SEEDS="${EXPAND_SEEDS:-2}"
+EXPAND_LIMIT="${EXPAND_LIMIT:-20}"
 if [ -z "$KEYWORD" ]; then
   printf "Keyword (e.g. restaurant paris, clinique lyon, ecommerce france): "
   read -r KEYWORD
@@ -150,8 +154,73 @@ print(f'{f}\t{p}\t{1 if bio and bio not in (chr(39)+chr(39),chr(34)+chr(34),\"No
   fi
 done <<< "$CANDS"
 printf "%s\n" "${QUALIFIED[@]}" | sort -u > "$QLIST"
+# --- stage 4: follower expansion (degrades on 429; same filters as stage 1) ---
+if [ "$EXPAND" = "1" ]; then
+  SEEDS=$(grep . "$QLIST" 2>/dev/null | head -n "$EXPAND_SEEDS")
+  if [ -z "$SEEDS" ]; then echo "--- expansion skipped (no qualified seeds) ---"; fi
+  for s in $SEEDS; do
+    FOUT=$(opencli instagram followers "$s" --limit "$EXPAND_LIMIT" -f yaml 2>&1 || true)
+    if echo "$FOUT" | grep -q "HTTP 429\|ok: false\|DOCTYPE\|SyntaxError\|BROWSER_CONNECT\|not connected"; then
+      echo "--- expansion paused on @$s (endpoint limited, auto-retries next run) ---"
+      break
+    fi
+    NEWN=0
+    while IFS=$'\t' read -r u is_priv is_ver; do
+      [ -z "$u" ] && continue
+      [ "$is_ver" = "1" ] && continue
+      if [ "$is_priv" = "1" ]; then
+        awk -F, -v u="$u" '$3==u{found=1} END{exit !found}' "$CSV" 2>/dev/null || echo "$D,$KEYWORD,$u,,SKIP private account (via $s),no,no" >> "$CSV"
+        continue
+      fi
+      awk -F, -v u="$u" '$3==u{found=1} END{exit !found}' "$CSV" 2>/dev/null && continue
+      echo "$D,$KEYWORD,$u,,to_verify: found via @$s followers - manual activity+site check,no,no" >> "$CSV"
+      QUALIFIED+=("$u"); NEWN=$((NEWN + 1))
+    done <<< "$(echo "$FOUT" | python3 -c "
+import re,sys
+txt = sys.stdin.read()
+users = []
+for block in re.split(r'(?m)^-\s', txt):
+  m = re.search(r'username:\s*(\S+)', block)
+  if not m: continue
+  u = m.group(1).strip().strip(chr(39)+chr(34))
+  priv = re.search(r\"private:\s*['\\\"]?(Yes|No|True|False)\", block)
+  ver = re.search(r\"verified:\s*['\\\"]?(Yes|No|True|False)\", block)
+  users.append((u, (priv.group(1).lower() in ('yes','true')) if priv else False, (ver.group(1).lower() in ('yes','true')) if ver else False))
+seen, out = set(), []
+for u, p, v in users:
+  if u not in seen: seen.add(u); out.append(f'{u}\t{int(p)}\t{int(v)}')
+print('\n'.join(out))")"
+    echo "expand @$s: +$NEWN new candidates"
+    printf "%s\n" "${QUALIFIED[@]}" | sort -u > "$QLIST"
+    sleep "$SLEEP_S"
+  done
+fi
 N=$(grep -c . "$QLIST" 2>/dev/null || true); N=${N:-0}
 echo "--- $N qualified -> $QLIST (enriched raw: $ENRICHED) ---"
+# --- persist qualified in-repo under clients/ ---
+CDIR="$(cd "$(dirname "$0")" && pwd)/clients"
+mkdir -p "$CDIR"
+CFILE="$CDIR/${SAFE}-${STAMP}.csv"
+{ echo "date,keyword,username,stage";
+  while read -r u; do
+    [ -z "$u" ] && continue
+    STAGE=$(python3 -c "
+import sys
+csv, want = sys.argv[1], sys.argv[2]
+for line in open(csv, errors='ignore'):
+  p = line.rstrip('\n').split(',', 4)
+  if len(p) == 5 and p[2] == want:
+    print(p[4]); break" "$CSV" "$u")
+    echo "$D,$KEYWORD,$u,${STAGE:-staged}"
+  done < "$QLIST"; } > "$CFILE"
+POOL="$CDIR/pool.csv"
+[ -f "$POOL" ] || echo "date,keyword,username,stage" > "$POOL"
+tail -n +2 "$CFILE" | while IFS=, read -r d k u rest; do
+  [ -z "$u" ] && continue
+  awk -F, -v u="$u" '$3==u{found=1} END{exit !found}' "$POOL" 2>/dev/null || echo "$d,$k,$u,$rest" >> "$POOL"
+done
+# note: pool dedupe is best-effort; CSV (~/.agent-reach) stays the source of truth
+echo "--- clients file: $CFILE | pool: $POOL ---"
 if [ "$N" -gt 0 ]; then
   echo "Quick activity check (logged-in browser):"
   while read -r u; do [ -n "$u" ] && echo "  https://www.instagram.com/$u/"; done < "$QLIST"
