@@ -1,0 +1,18 @@
+# keyword variations — one per line. IG returns ~5 users/query, so vary wording.
+# hair/barber
+barbier lille
+coiffure lille
+coiffeur lille
+barber rouen
+barbier rouen
+coiffure rouen
+# nails/beauty
+onglerie nantes
+ongle nantes
+institut beaute nantes
+# local services
+plombier bordeaux
+electricien bordeaux
+# food
+restaurant marocain lille
+restaurant italien nantes
