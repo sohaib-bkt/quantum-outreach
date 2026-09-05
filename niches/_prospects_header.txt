@@ -1,0 +1,3 @@
+# Prospect store — persistent, outside workspace per agent-reach rule
+# Created by run.sh. Columns:
+# date,keyword,username,niche,problem_found,message_sent,replied
