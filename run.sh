@@ -2,8 +2,12 @@
 # quantum-outreach entrypoint — keyword first, multi-niche, quality-filtered
 # Usage: ./run.sh "coiffeur amiens" 20
 #        NICHE=coiffure ./run.sh "coiffeur amiens"   (override niche file; else auto from keywords/ packs)
-# Env knobs: MIN_FOLLOWERS=30 MIN_POSTS=5 REQUIRE_BIO=1 RECENCY_DAYS=120 SKIP_RECENCY=0 SLEEP_S=10
+# Env knobs: MIN_FOLLOWERS=30 MIN_POSTS=5 REQUIRE_BIO=1 RECENCY_DAYS=180 SKIP_RECENCY=0 SLEEP_S=10
 #            EXPAND=1 EXPAND_SEEDS=2 EXPAND_LIMIT=20
+# Pool rule (strict): a user enters clients/<niche>.csv ONLY with a verified
+# post <= RECENCY_DAYS old. Anything unverifiable (profile/user 429, login
+# wall, unparseable dates) is parked in the master CSV as to_verify and stays
+# OUT of the pool. SKIP_RECENCY=1 is an explicit opt-out (marks UNCHECKED).
 set -e
 export PATH="$HOME/quantum-outreach/.venv/bin:$PATH"
 KEYWORD="${1:-}"
@@ -11,9 +15,10 @@ LIMIT="${2:-40}"
 MIN_FOLLOWERS="${MIN_FOLLOWERS:-30}"
 MIN_POSTS="${MIN_POSTS:-5}"
 REQUIRE_BIO="${REQUIRE_BIO:-1}"
-RECENCY_DAYS="${RECENCY_DAYS:-120}"
+RECENCY_DAYS="${RECENCY_DAYS:-180}"
 SKIP_RECENCY="${SKIP_RECENCY:-0}"
 SLEEP_S="${SLEEP_S:-10}"
+LIBDIR="$(cd "$(dirname "$0")/lib" && pwd)"
 EXPAND="${EXPAND:-1}"
 EXPAND_SEEDS="${EXPAND_SEEDS:-2}"
 EXPAND_LIMIT="${EXPAND_LIMIT:-20}"
@@ -88,17 +93,15 @@ while IFS=$'\t' read -r u is_priv is_ver; do
   fi
   if awk -F, -v u="$u" '$3==u{found=1} END{exit !found}' "$CSV" 2>/dev/null; then echo "drop $u (already in CSV)"; continue; fi
   # --- stage 2: enrich via profile (followers/posts/bio); degrade gracefully on 429 ---
-  if [ "$ENRICH_HIT_429" = "0" ]; then
-    POUT=$(opencli instagram profile "$u" -f yaml 2>&1 || true)
-    if echo "$POUT" | grep -q "HTTP 429"; then
-      echo "profile 429 on $u — enrichment paused (limits reset in ~1h); rest staged unenriched."
-      ENRICH_HIT_429=1
-      echo "$D,$KEYWORD,$u,,to_verify: enrichment paused (429) - manual activity+site check,no,no" >> "$CSV"
-      QUALIFIED+=("$u")
-    elif echo "$POUT" | grep -q "ok: false"; then
-      echo "keep $u (profile lookup failed, manual check)"
-      echo "$D,$KEYWORD,$u,,to_verify: profile lookup failed - manual activity+site check,no,no" >> "$CSV"
-      QUALIFIED+=("$u")
+    if [ "$ENRICH_HIT_429" = "0" ]; then
+      POUT=$(opencli instagram profile "$u" -f yaml 2>&1 || true)
+      if echo "$POUT" | grep -q "HTTP 429"; then
+        echo "profile 429 on $u — parked (NOT pool-qualified, limits reset in ~1h)."
+        ENRICH_HIT_429=1
+        echo "$D,$KEYWORD,$u,,to_verify: enrichment paused (429) - manual activity+site check,no,no" >> "$CSV"
+      elif echo "$POUT" | grep -q "ok: false"; then
+        echo "park $u (profile lookup failed - manual check, NOT pool-qualified)"
+        echo "$D,$KEYWORD,$u,,to_verify: profile lookup failed - manual activity+site check,no,no" >> "$CSV"
     else
       echo "$POUT" >> "$ENRICHED"
       SIG=$(echo "$POUT" | python3 -c "
@@ -115,9 +118,11 @@ def num(k):
   except: return -1
 f=num('followers'); p=num('posts')
 b=re.search(r'bio:\s*(.+)',t)
-bio=(b.group(1).strip() if b else '')
-print(f'{f}\t{p}\t{1 if bio and bio not in (chr(39)+chr(39),chr(34)+chr(34),\"None\",\"null\",\"~\") else 0}')")
+bio=(b.group(1).strip().strip(chr(39)+chr(34)) if b else '')
+bio=bio.replace('\t',' ').strip()
+print(f'{f}\t{p}\t{1 if bio and bio not in (\"None\",\"null\",\"~\") else 0}\t{bio}')")
       FOL=$(echo "$SIG" | cut -f1); PST=$(echo "$SIG" | cut -f2); HASBIO=$(echo "$SIG" | cut -f3)
+      BIO=$(echo "$SIG" | cut -f4-)
       REASON=""
       { [ "$FOL" -ge 0 ] && [ "$FOL" -lt "$MIN_FOLLOWERS" ] && REASON="low followers($FOL)"; } || true
       { [ -z "$REASON" ] && [ "$PST" -ge 0 ] && [ "$PST" -lt "$MIN_POSTS" ] && REASON="few posts($PST)"; } || true
@@ -127,30 +132,50 @@ print(f'{f}\t{p}\t{1 if bio and bio not in (chr(39)+chr(39),chr(34)+chr(34),\"No
         echo "$D,$KEYWORD,$u,,SKIP $REASON (fol=$FOL posts=$PST),no,no" >> "$CSV"
         sleep "$SLEEP_S"; continue
       fi
-      # --- stage 3: recency via recent posts (survivors only) ---
+      # --- stage 2b: bio site pre-filter (own domain -> OUT now, not later) ---
+      SITE=$(printf '%s' "$BIO" | PYTHONPATH="$LIBDIR" python3 -c "import sys; sys.path.insert(0,'$LIBDIR'); from filter import classify_bio; k,d=classify_bio(sys.stdin.read()); print(k+'\t'+(d or ''))")
+      SKIND=$(echo "$SITE" | cut -f1); SDOM=$(echo "$SITE" | cut -f2)
+      ANGLE=""
+      if [ "$SKIND" = "standalone" ]; then
+        echo "drop $u (bio links own site $SDOM)"
+        echo "$D,$KEYWORD,$u,,OUT has $SDOM (bio link pre-filter),no,no" >> "$CSV"
+        sleep "$SLEEP_S"; continue
+      elif [ "$SKIND" = "booking" ]; then
+        ANGLE=" - angle resa directe ($SDOM only)"
+      fi
+      # --- stage 3: recency via recent posts (survivors only).
+      # STRICT: only a verified post <= RECENCY_DAYS old qualifies for the pool.
+      # Unverifiable (429/login wall/unparseable) is parked in master, NOT qualified.
       if [ "$SKIP_RECENCY" = "0" ]; then
-        UOUT=$(opencli instagram user "$u" --limit 3 -f yaml 2>&1 || true)
+        UOUT=$(opencli instagram user "$u" --limit 5 -f yaml 2>&1 || true)
         if echo "$UOUT" | grep -q "ok: false\|HTTP 429\|SyntaxError\|DOCTYPE"; then
-          echo "keep $u (fol=$FOL posts=$PST, recency unknown - manual check)"
-          echo "$D,$KEYWORD,$u,,to_verify: fol=$FOL posts=$PST recency unknown - check site+bio manually,no,no" >> "$CSV"
-          QUALIFIED+=("$u")
+          echo "park $u (fol=$FOL posts=$PST, recency unverifiable - manual date check, NOT pool-qualified)"
+          echo "$D,$KEYWORD,$u,,to_verify: fol=$FOL posts=$PST recency unknown - check last-post date+bio manually,no,no" >> "$CSV"
         else
           echo "$UOUT" >> "$ENRICHED"
-          echo "keep $u (fol=$FOL posts=$PST, recent posts found - verify date manually)"
-          echo "$D,$KEYWORD,$u,,to_verify: fol=$FOL posts=$PST active - web-check official site,no,no" >> "$CSV"
-          QUALIFIED+=("$u")
+          AGE=$(printf '%s' "$UOUT" | PYTHONPATH="$LIBDIR" python3 -c "import sys; sys.path.insert(0,'$LIBDIR'); from filter import newest_post_age_days; a=newest_post_age_days(sys.stdin.read()); print('' if a is None else a)")
+          if [ -z "$AGE" ]; then
+            echo "park $u (fol=$FOL posts=$PST, no parseable post date - manual check, NOT pool-qualified)"
+            echo "$D,$KEYWORD,$u,,to_verify: fol=$FOL posts=$PST no parseable post date - manual check,no,no" >> "$CSV"
+          elif [ "$AGE" -gt "$RECENCY_DAYS" ]; then
+            echo "drop $u (inactive: last post ${AGE}d ago > ${RECENCY_DAYS}d)"
+            echo "$D,$KEYWORD,$u,,SKIP inactive last post ${AGE}d ago (> ${RECENCY_DAYS}d) (fol=$FOL posts=$PST),no,no" >> "$CSV"
+          else
+            echo "keep $u (fol=$FOL posts=$PST, last post ${AGE}d ago$ANGLE)"
+            echo "$D,$KEYWORD,$u,,active ${AGE}d ago fol=$FOL posts=$PST$ANGLE - web-check official site,no,no" >> "$CSV"
+            QUALIFIED+=("$u")
+          fi
         fi
       else
-        echo "keep $u (fol=$FOL posts=$PST)"
-        echo "$D,$KEYWORD,$u,,to_verify: fol=$FOL posts=$PST - web-check official site,no,no" >> "$CSV"
+        echo "keep $u (fol=$FOL posts=$PST, recency UNCHECKED via SKIP_RECENCY=1$ANGLE)"
+        echo "$D,$KEYWORD,$u,,active UNCHECKED (SKIP_RECENCY=1) fol=$FOL posts=$PST$ANGLE - web-check official site,no,no" >> "$CSV"
         QUALIFIED+=("$u")
       fi
     fi
     sleep "$SLEEP_S"
   else
-    echo "keep $u (unenriched - manual check)"
+    echo "park $u (unenriched - manual check, NOT pool-qualified)"
     echo "$D,$KEYWORD,$u,,to_verify: enrichment paused (429) - manual activity+site check,no,no" >> "$CSV"
-    QUALIFIED+=("$u")
   fi
 done <<< "$CANDS"
 printf "%s\n" "${QUALIFIED[@]}" | sort -u > "$QLIST"
@@ -173,8 +198,10 @@ if [ "$EXPAND" = "1" ]; then
         continue
       fi
       awk -F, -v u="$u" '$3==u{found=1} END{exit !found}' "$CSV" 2>/dev/null && continue
-      echo "$D,$KEYWORD,$u,,to_verify: found via @$s followers - manual activity+site check,no,no" >> "$CSV"
-      QUALIFIED+=("$u"); NEWN=$((NEWN + 1))
+      # Expansion hits skip enrichment (no profile/recency proof) -> staged in
+      # master for a later verification run, NEVER directly pool-qualified.
+      echo "$D,$KEYWORD,$u,,to_verify: found via @$s followers - needs profile+recency check,no,no" >> "$CSV"
+      NEWN=$((NEWN + 1))
     done <<< "$(echo "$FOUT" | python3 -c "
 import re,sys
 txt = sys.stdin.read()
@@ -190,7 +217,7 @@ seen, out = set(), []
 for u, p, v in users:
   if u not in seen: seen.add(u); out.append(f'{u}\t{int(p)}\t{int(v)}')
 print('\n'.join(out))")"
-    echo "expand @$s: +$NEWN new candidates"
+    echo "expand @$s: +$NEWN staged for verification (NOT pool-qualified until recency proven)"
     printf "%s\n" "${QUALIFIED[@]}" | sort -u > "$QLIST"
     sleep "$SLEEP_S"
   done
@@ -229,7 +256,7 @@ for line in open(csv, errors='ignore'):
   p = head.split(',', 4)
   if len(p) != 5: continue
   d, kw, u, n4, stage = p
-  if stage.startswith(('SKIP','OUT')): continue
+  if stage.startswith(('SKIP','OUT','to_verify','unclear')): continue
   store[u] = (d, kw, stage, sent, replied)
 added = 0
 with open(nfile, 'a') as f:
@@ -243,5 +270,6 @@ if [ "$N" -gt 0 ]; then
   echo "Quick activity check (logged-in browser):"
   while read -r u; do [ -n "$u" ] && echo "  https://www.instagram.com/$u/"; done < "$QLIST"
 fi
-echo "Next: give me the usernames (or $QLIST), I web-check official sites,"
-echo "keep only NO-SITE ones, then draft FR messages. You send manually."
+echo "Next: give me the usernames (or $QLIST = active <=${RECENCY_DAYS}d only), I web-check"
+echo "official sites, keep only NO-SITE ones, then draft FR messages. You send manually."
+echo "Parked (unverified recency/site): grep to_verify ~/.agent-reach/quantum-prospects.csv"
